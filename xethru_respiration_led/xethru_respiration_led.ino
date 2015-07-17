@@ -1,9 +1,3 @@
-// inslude the SPI library:
-#include <SPI.h>
-
-// set pin 10 as the slave select for the digital pot:
-const int slaveSelectPin = 10;
-
 //LED pins
 const int red_pin = 3;
 const int green_pin = 6;
@@ -73,9 +67,6 @@ int receive_data() {
   char last_char = 0x00;
   int recv_len = 0;  //Number of bytes received
 
-  //while (!Serial.available())
-  //  setColor(255, 255, 255, 1.0);
-  
   //Wait for start character
   while (1) 
   {
@@ -150,7 +141,6 @@ int receive_data() {
   }
   else 
   {
-    //setColor(255, 0, 0, 1.0);
     return -1; // Return -1 upon crc failure
   } 
 }
@@ -179,10 +169,6 @@ void get_respiration_data() {
      return;
   }
   
-  //Clear the color
-  //setColor(0, 0, 0, 0.0);
-  
-  
   // Now recv_buf should be filled with valid data
   
   
@@ -205,10 +191,7 @@ void get_respiration_data() {
   }
   
 
-  long rpm = 0;
-  float distance = 0;
   float * movement;
-  long sig_quality = 0;
   float brightness = 0;
   
   // State code
@@ -239,23 +222,23 @@ void get_respiration_data() {
         
       break;
     case xts_val_resp_state_movement:
-      //print "Movement"
+      // "Movement"
       setColor(255, 255, 0, 1.0);
       break;
     case xts_val_resp_state_movement_tracking:
-      //print "Movement tracking"
+      // "Movement tracking"
       setColor(0, 255, 0, 1.0);
       break;
     case xts_val_resp_state_no_movement:
-      //print "No movement"
+      // "No movement"
       setColor(255, 255, 255, 1.0);
       break;
     case xts_val_resp_state_initializing:
-      //print "Initializing"
+      // "Initializing"
       setColor(255, 0, 255, 1.0);
       break;
     case xts_val_resp_state_unknown:
-      //print "State unknown"
+      // "State unknown"
       setColor(255, 0, 0, 1.0);
       break;
     default:  
@@ -340,24 +323,7 @@ void blink_blue() {
   }
 }
 
-void send_spi(unsigned char ch)
-{
-   // take the SS pin low to select the chip:
-  digitalWrite(slaveSelectPin,LOW);
-  //  send in the address and value via SPI:
-  SPI.transfer(ch);
-  // take the SS pin high to de-select the chip:
-  digitalWrite(slaveSelectPin,HIGH);  
-  
-  delay(50);
-}
-
 void setup() {
-  pinMode (slaveSelectPin, OUTPUT);
-  // initialize SPI:
-  SPI.begin(); 
-  SPI.setClockDivider(SPI_CLOCK_DIV128);
-  
   Serial.begin(115200);
   
   pinMode(green_pin, OUTPUT);
