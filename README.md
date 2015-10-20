@@ -5,6 +5,8 @@ The example led-fader-new was tested and verified working the 20th of October 20
 
 TODO:
 
--Add support for presence module
--Add error checking
--Add escaping of special character when sending commands
+* Add support for presence module
+
+* Add error checking
+
+* Add escaping of special character when sending commands
