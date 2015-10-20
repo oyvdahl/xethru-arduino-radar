@@ -5,9 +5,21 @@
 
 #include "XeThruRadar.h"
 
+/*
 XeThruRadar::XeThruRadar()
 {
   Serial.begin(115200);
+  Serial.write(88);
+}
+*/
+
+XeThruRadar::XeThruRadar()
+{
+}
+
+void XeThruRadar::init()
+{
+  Serial.begin(115200); 
 }
 
 
@@ -183,7 +195,7 @@ float XeThruRadar::get_resp_movement() {
   if (receive_data() != 0)
   {
      //Something went wrong! 
-     return -1;
+     return -99.0;
   }
   
   // Now recv_buf should be filled with valid data
@@ -193,14 +205,14 @@ float XeThruRadar::get_resp_movement() {
   if (_recv_buf[1] != _xts_spr_appdata)
   {
      //Something went wrong! 
-     return -1;
+     return -99.0;
   }
   
   // TODO: Check that _xts_id_resp_status is correct (just to make sure we are getting the right data)
 
   // Check that it's the correct state code
   if (_recv_buf[10] != _xts_val_resp_state_breathing)
-    return -1; 
+    return -99.0; 
 
   //Point float pointer to the first byte of the float in the buffer
   movement = (float*)&_recv_buf[22];      

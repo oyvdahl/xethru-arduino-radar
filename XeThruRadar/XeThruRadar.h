@@ -9,6 +9,8 @@ class XeThruRadar
 {
   public:
     XeThruRadar();
+    
+    void init();
     int get_resp_state();
     int get_rpm();
     float get_resp_movement();
