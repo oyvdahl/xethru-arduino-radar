@@ -133,6 +133,90 @@ int XeThruRadar::receive_data() {
   } 
 }
 
+int XeThruRadar::receive_raw_data() {
+  
+  // Get response
+
+  char last_char = 0x00;
+  int recv_len = 0;  //Number of bytes received
+
+  //Wait for start character
+  while (1) 
+  {
+    char c = Serial.read();	// Get one byte from radar
+    
+    if (c == _xt_escape)
+    {
+      // If it's an escape character –
+      // ...ignore next character in buffer
+      Serial.read();
+    }
+    else if (c == _xt_start) 
+    {
+      // If it's the start character –  
+      // ...we fill the first character of the buffer and move on
+      _recv_buf[0] = _xt_start;
+      recv_len = 1;
+      break;
+    }
+  }
+  
+  // Start receiving the rest of the bytes
+  while (1) 
+  {
+    // read a byte
+    char cur_char = Serial.read();	// Get one byte from radar
+    
+    if (cur_char == -1) {
+      continue;
+    }
+      
+    // Fill response buffer, and increase counter
+    _recv_buf[recv_len] = cur_char;
+    recv_len++;
+    
+    // is it the stop byte?
+    if (cur_char == _xt_stop) {
+      if (last_char != _xt_escape)
+        break;  //Exit this loop 
+    }
+    
+    // Update last_char
+    last_char = cur_char;
+  }
+  
+  
+  
+  // Calculate CRC
+  char crc = 0;
+  char escape_found = 0;
+  
+  // CRC is calculated without the crc itself and the stop byte, hence the -2 in the counter
+  for (int i = 0; i < recv_len-2; i++) 
+  {
+    // We need to ignore escape bytes when calculating crc
+    if (_recv_buf[i] == _xt_escape && !escape_found) {
+      escape_found = 1;
+      continue;
+    }
+    else {
+      crc ^= _recv_buf[i];
+      escape_found = 0;
+    }
+  }
+  
+  
+  // Check if calculated CRC matches the recieved
+  if (crc == _recv_buf[recv_len-2]) 
+  {
+    return recv_len;  // Return 0 upon success
+  }
+  else 
+  {
+    return -1; // Return -1 upon crc failure
+  } 
+}
+
 
 void XeThruRadar::empty_serial_buffer()
 {
@@ -141,6 +225,30 @@ void XeThruRadar::empty_serial_buffer()
     Serial.read();	// Remove one byte from the buffer
   } 
 }
+
+
+int XeThruRadar::get_raw() {
+  
+    //The arduino is not fast enough to receive all the data from the radar (it seems)
+  //...so always empty the buffer of old data, so that we are sure we have fresh data
+  empty_serial_buffer();
+  if (receive_raw_data() == -1)
+  {
+     //Something went wrong! 
+     return -1;
+  }
+  // Now recv_buf should be filled with valid data
+  
+  // Check that it's app-data we've received
+  if (_recv_buf[1] != _xts_spr_appdata)
+  {
+     //Something went wrong! 
+     return -1;
+  }
+  
+  return 66;
+}
+
 
 
 int XeThruRadar::get_rpm() {
@@ -279,6 +387,57 @@ void XeThruRadar::load_respiration_app()
   //Get response
   receive_data();
 }
+
+// Load sleep app
+void XeThruRadar::load_sleep_app() 
+{
+  //Fill send buffer
+  unsigned char send_buf[5];
+  send_buf[0] = _xts_spc_mod_loadapp;
+  send_buf[4] = (_xts_id_app_sleep >> 24) & 0xff;
+  send_buf[3] = (_xts_id_app_sleep >> 16) & 0xff;  
+  send_buf[2] = (_xts_id_app_sleep >> 8) & 0xff;
+  send_buf[1] = _xts_id_app_sleep & 0xff;
+  
+  //Send the command
+  send_command(send_buf, 5);
+  
+  //Get response
+  receive_data();
+}
+
+// Enable Raw Data
+void XeThruRadar::enable_raw_data() 
+{
+  //Convert these values to int
+  int XTS_SACR_OUTPUTBASEBAND = _xts_sacr_outputbaseband;
+  int XTS_SACR_ID_BASEBAND_OUTPUT_AP = _xts_sacr_id_baseband_output_iq_amplitude_phase;
+  
+  //Fill send buffer
+  unsigned char send_buf[10];
+  
+  send_buf[0] = _xts_spc_dir_command;
+  send_buf[1] = _xts_sdc_app_setint;
+  
+  send_buf[2] = XTS_SACR_OUTPUTBASEBAND & 0xff;
+  send_buf[3] = (XTS_SACR_OUTPUTBASEBAND >> 8) & 0xff;
+  send_buf[4] = (XTS_SACR_OUTPUTBASEBAND >> 16) & 0xff;  
+  send_buf[5] = (XTS_SACR_OUTPUTBASEBAND >> 24) & 0xff;
+  
+  send_buf[6] = XTS_SACR_ID_BASEBAND_OUTPUT_AP & 0xff;
+  send_buf[7] = (XTS_SACR_ID_BASEBAND_OUTPUT_AP >> 8) & 0xff;
+  send_buf[8] = (XTS_SACR_ID_BASEBAND_OUTPUT_AP >> 16) & 0xff;  
+  send_buf[9] = (XTS_SACR_ID_BASEBAND_OUTPUT_AP >> 24) & 0xff;  
+  
+  
+  //Send the command
+  send_command(send_buf, 10);
+  
+  //Get response
+  receive_data();
+}
+
+
 
 // Execute application
 void XeThruRadar::execute_app() 
