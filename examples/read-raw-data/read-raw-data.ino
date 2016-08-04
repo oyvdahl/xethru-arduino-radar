@@ -83,4 +83,8 @@ void spi_send_data(float numero)
 
 
 
+<<<<<<< HEAD
 
+=======
+
+>>>>>>> 7f90551a4d224be945a5e3e63edeb2efac8f774d
