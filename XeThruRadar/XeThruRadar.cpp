@@ -1,29 +1,142 @@
-<<<<<<< HEAD
 /*
   XeThruRadar.cpp - Library for using the XeThru Radar module
-  Created by Oyvind N. Dahl, August 13, 2015.
+  --Created by Oyvind N. Dahl, August 13, 2015.
+  --Updated by Oyvind N. Dahl, May 22, 2017.
+  
+  Notes:
+  --Sleep application not implemented
+  --Do not use enableDebug() function if you want to use the same serial port in your application
+  --Designed for Arduino Zero. To use with other Arduinos, edit the line "#define SerialRadar Serial1" below
+  --To use the enableDebug() function with other Arduinos, edit the line "#define SerialDebug SerialUSB" below
+  
 */
 
 #include "XeThruRadar.h"
 
-/*
-XeThruRadar::XeThruRadar()
-{
-  Serial.begin(115200);
-  Serial.write(88);
-}
-*/
+#define SerialRadar Serial1
+#define SerialDebug SerialUSB
 
-XeThruRadar::XeThruRadar()
-{
-}
+XeThruRadar::XeThruRadar() {}
 
 void XeThruRadar::init()
 {
-  Serial.begin(115200); 
+  debug_println("Init sequence starting...");
+  
+  // Init serial port for communicating with radar
+  SerialRadar.begin(115200);
+  delay(100);
+  
+  // Empty incoming serial buffer (in case of old data)
+  empty_serial_buffer();
+  
+  // Reset module to start from scratch
+  reset_module();
+
+  // Receive system status messages
+  debug_println("Waiting for system status messages...");
+  while (!radar_ready()) {
+    debug_println("Radar not ready, trying another reset...");
+    empty_serial_buffer();
+    send_command(&_xts_spc_mod_reset, 1);
+  }
+  
+  debug_println("Init sequence complete!");
 }
 
 
+
+/*********************************************** 
+  For enabling internal debugging
+  
+  Note: should only be used by developers 
+        to debugging/improving the library
+ ***********************************************/
+void XeThruRadar::enableDebug()
+{
+  enable_debug_port = true;
+  SerialDebug.begin(115200);
+  while (!SerialDebug);
+  
+  debug_println("Debugging enabled");
+  debug_println("Waiting 5 seconds");
+  delay(5000);
+}
+
+
+
+
+
+
+/*************************************
+*
+* SEND / RECEIVE / SERIAL COMMANDS
+*
+*************************************/
+
+
+/**
+* Reads one character from the serial RX buffer.
+* Blocks until a character is available.
+*/
+unsigned char XeThruRadar::serial_read_blocking()
+{
+  while (SerialRadar.available() < 1) {
+    delay(1);
+  }
+  return SerialRadar.read();
+}
+
+
+/**
+* Checks if the RX buffer is overflowing.
+* The Arduino RX buffer is only 64 bytes,
+* so this happens a lot with fast data rates
+*/
+bool XeThruRadar::check_overflow()
+{
+  if (SerialRadar.available() >= SERIAL_BUFFER_SIZE-1) {
+    debug_println("Buffer overflowed");
+    return true;
+  }
+  
+  return false;
+}
+
+
+// Empties the Serial RX buffer
+void XeThruRadar::empty_serial_buffer()
+{
+  debug_print("Emptying serial buffer... ");
+  
+  while (SerialRadar.available() > 0)
+    SerialRadar.read();  // Remove one byte from the buffer
+  
+  debug_println("Done!");
+}
+
+
+
+///////////////////
+// DEBUG functions
+///////////////////
+void XeThruRadar::debug_println(String msg)
+{
+  if (enable_debug_port == true)
+    SerialDebug.println(msg);
+}
+
+void XeThruRadar::debug_print(String msg)
+{
+  if (enable_debug_port == true)
+    SerialDebug.print(msg);
+}
+
+
+
+
+/*****************
+* Sends a command
+******************/
 void XeThruRadar::send_command(const unsigned char * cmd, int len) {
 
   // Calculate CRC
@@ -31,724 +144,386 @@ void XeThruRadar::send_command(const unsigned char * cmd, int len) {
   for (int i = 0; i < len; i++)
     crc ^= cmd[i];
 
-  
+
   // Add escape bytes if necessary
   for (int i = 0; i < len; i++) {
     if (cmd[i] == 0x7D || cmd[i] == 0x7E || cmd[i] == 0x7F)
     {
-     //TODO: Implement escaping 
+     //TODO: Implement escaping
+     SerialDebug.write("CRC Escaping needed for send:buf! Halting...");
+     while(1) {}
     }
   }
-  
-  // Send xt_start + command + crc_string + xt_stop
-  Serial.write(_xt_start);
-  Serial.write(cmd, len);
-  Serial.write(crc);
-  Serial.write(_xt_stop);
+
+  // Send _xt_start + command + crc_string + _xt_stop
+  SerialRadar.write(_xt_start);
+  SerialRadar.write(cmd, len);
+  SerialRadar.write(crc);
+  SerialRadar.write(_xt_stop);
+  SerialRadar.flush();
   
 }
   
   
+/**
+* Receives one data package from Serial
+* buffer and stores it in recv_buf
+*
+* Returns the length of the data received.
+*/ 
+int XeThruRadar::receive_data(bool print_data) {
   
-int XeThruRadar::receive_data() {
-  
-  // Get response
-
-  char last_char = 0x00;
+  int last_char = 0;
   int recv_len = 0;  //Number of bytes received
+  unsigned char cur_char;
 
   //Wait for start character
-  while (1) 
+  while (1)
   {
-    char c = Serial.read();	// Get one byte from radar
-    
-    if (c == _xt_escape)
+    // Check if input buffer is overflowed
+    if (check_overflow())
+      empty_serial_buffer();
+
+    // Get one byte from radar
+    cur_char = serial_read_blocking();
+  
+    if (cur_char == _xt_escape)
     {
+      // Check if input buffer is overflowed
+      if (check_overflow()) {
+        debug_println("Overflow while receiving. Aborting receive_data()");
+        return -1;
+      }  
+
       // If it's an escape character –
       // ...ignore next character in buffer
-      Serial.read();
+      serial_read_blocking();
     }
-    else if (c == _xt_start) 
+    else if (cur_char == _xt_start)
     {
-      // If it's the start character –  
+      // If it's the start character –
       // ...we fill the first character of the buffer and move on
       _recv_buf[0] = _xt_start;
       recv_len = 1;
       break;
     }
   }
-  
+
   // Start receiving the rest of the bytes
-  while (1) 
+  while (1)
   {
-    // read a byte
-    char cur_char = Serial.read();	// Get one byte from radar
-    
-    if (cur_char == -1) {
-      continue;
+    // Check if input buffer is overflowed
+    if (check_overflow()) {
+      debug_println("Overflow while receiving. Aborting receive_data()");
+      return -1;
     }
-      
-    // Fill response buffer, and increase counter
-    _recv_buf[recv_len] = cur_char;
-    recv_len++;
-    
-    // is it the stop byte?
-    if (cur_char == _xt_stop) {
-      if (last_char != _xt_escape)
-        break;  //Exit this loop 
-    }
-    
-    // Update last_char
-    last_char = cur_char;
-  }
-  
-  
-  
-  // Calculate CRC
-  char crc = 0;
-  char escape_found = 0;
-  
-  // CRC is calculated without the crc itself and the stop byte, hence the -2 in the counter
-  for (int i = 0; i < recv_len-2; i++) 
-  {
-    // We need to ignore escape bytes when calculating crc
-    if (_recv_buf[i] == _xt_escape && !escape_found) {
-      escape_found = 1;
-      continue;
-    }
-    else {
-      crc ^= _recv_buf[i];
-      escape_found = 0;
-    }
-  }
-  
-  
-  // Check if calculated CRC matches the recieved
-  if (crc == _recv_buf[recv_len-2]) 
-  {
-    return 0;  // Return 0 upon success
-  }
-  else 
-  {
-    return -1; // Return -1 upon crc failure
-  } 
-}
 
-int XeThruRadar::receive_raw_data() {
-  
-  // Get response
+    // Get one byte from radar
+    cur_char = serial_read_blocking();  
 
-  char last_char = 0x00;
-  int recv_len = 0;  //Number of bytes received
-
-  //Wait for start character
-  while (1) 
-  {
-    char c = Serial.read();	// Get one byte from radar
-    
-    if (c == _xt_escape)
+    if (cur_char == _xt_escape)
     {
+      // Check if input buffer is overflowed
+      if (check_overflow()) {
+        debug_println("Overflow while receiving. Aborting receive_data()");
+        return -1;
+      }
+    
       // If it's an escape character –
-      // ...ignore next character in buffer
-      Serial.read();
+      // fetch the next byte from serial
+      cur_char = serial_read_blocking();
+  
+      // Make sure to not overwrite receive buffer
+      if (recv_len >= RX_BUF_LENGTH) {
+        debug_println("Received more than rx buffer size. Aborting receive_data()");
+        return -1;
+      }
+        
+
+      // Fill response buffer, and increase counter
+      _recv_buf[recv_len] = cur_char;
+      recv_len++;
     }
-    else if (c == _xt_start) 
+
+    else if (cur_char == _xt_start)
     {
-      // If it's the start character –  
-      // ...we fill the first character of the buffer and move on
-      _recv_buf[0] = _xt_start;
-      recv_len = 1;
-      break;
+      // If it's the start character, something is wrong
+      debug_println("Start character received in the middle of message. Aborting receive_data()");
+      return -1;
+    }
+
+    else
+    {
+      // Make sure not overwrite receive buffer
+      if (recv_len >= RX_BUF_LENGTH)
+        break;
+
+      // Fill response buffer, and increase counter
+      _recv_buf[recv_len] = cur_char;
+      recv_len++;
+  
+      // is it the stop byte?
+      if (cur_char == _xt_stop) {
+        break;  //Exit this loop
+      }
     }
   }
-  
-  // Start receiving the rest of the bytes
-  while (1) 
-  {
-    // read a byte
-    char cur_char = Serial.read();	// Get one byte from radar
-    
-    if (cur_char == -1) {
-      continue;
-    }
-      
-    // Fill response buffer, and increase counter
-    _recv_buf[recv_len] = cur_char;
-    recv_len++;
-    
-    // is it the stop byte?
-    if (cur_char == _xt_stop) {
-      if (last_char != _xt_escape)
-        break;  //Exit this loop 
-    }
-    
-    // Update last_char
-    last_char = cur_char;
-  }
-  
-  
-  
+
+
   // Calculate CRC
   char crc = 0;
   char escape_found = 0;
-  
+
   // CRC is calculated without the crc itself and the stop byte, hence the -2 in the counter
-  for (int i = 0; i < recv_len-2; i++) 
+  for (int i = 0; i < recv_len-2; i++)
   {
-    // We need to ignore escape bytes when calculating crc
-    if (_recv_buf[i] == _xt_escape && !escape_found) {
-      escape_found = 1;
-      continue;
-    }
-    else {
-      crc ^= _recv_buf[i];
-      escape_found = 0;
-    }
+    crc ^= _recv_buf[i];
+    escape_found = 0;
   }
-  
-  
+
+
+  // Print the received data
+   if (print_data) {
+    SerialDebug.print("Data: ");
+    for (int i = 0; i < recv_len; i++) {
+      SerialDebug.print(_recv_buf[i] ,HEX);
+      SerialDebug.print(" ");
+    }
+    SerialDebug.println(" ");
+  }
+
+
   // Check if calculated CRC matches the recieved
-  if (crc == _recv_buf[recv_len-2]) 
-  {
-    return recv_len;  // Return 0 upon success
+  if (crc == _recv_buf[recv_len-2])  {
+    return recv_len;  // Return length of data packet upon success
   }
-  else 
-  {
+  else {
+    debug_println("[Error]: CRC check failed!");
     return -1; // Return -1 upon crc failure
-  } 
+  }
+
 }
 
 
-void XeThruRadar::empty_serial_buffer()
+
+
+
+
+
+
+
+/*********************
+*
+* PROTOCOL COMMANDS
+*
+*********************/
+
+/**
+* Waiting for radar to become ready in the bootup sequence
+*/
+bool XeThruRadar::radar_ready()
 {
-  while (Serial.available())
-  {
-    Serial.read();	// Remove one byte from the buffer
-  } 
+  // Try receiving xts_sprs_ready signal up to 5 times
+  for (int i = 0; i < 5; i++) {
+    receive_data(enable_debug_port);
+    if (_recv_buf[2] == _xts_sprs_ready) {
+      return true;
+    }
+    delay(500);
+  }
+
+  return false;
 }
 
 
-int XeThruRadar::get_raw() {
+bool XeThruRadar::ping_radar()
+{
+  unsigned long pong_val = 0;
   
-    //The arduino is not fast enough to receive all the data from the radar (it seems)
-  //...so always empty the buffer of old data, so that we are sure we have fresh data
-  empty_serial_buffer();
-  if (receive_raw_data() == -1)
-  {
-     //Something went wrong! 
-     return -1;
+  debug_println("About to ping radar");
+  
+  //Fill send buffer
+  _send_buf[0] = _xts_spc_ping;
+  memcpy(_send_buf+1, &_xts_def_pingval, 4);
+
+  debug_println("ping_radar: memory ready");
+  //Send the command
+  send_command(_send_buf, 5);
+
+  debug_println("ping_radar: sent. Waiting for reply");
+  //Get response
+  receive_data(enable_debug_port);
+
+  debug_println("ping_radar: analysing response");
+  // Get the returned pong value
+  get_pong_val(&pong_val);
+
+  //Check the pong value
+  if (pong_val == _xts_def_pongval_ready) {
+    debug_println("ping_radar: PONGVAL_READY recieved");
+    return true;
   }
-  // Now recv_buf should be filled with valid data
-  
-  // Check that it's app-data we've received
-  if (_recv_buf[1] != _xts_spr_appdata)
-  {
-     //Something went wrong! 
-     return -1;
+  else if (pong_val == _xts_def_pongval_notready) {
+    debug_println("ping_radar: PONGVAL_NOT_READY recieved");
+    return false;
   }
-  
-  return 66;
+  else {
+    debug_println("Unknown PONG value");
+    return false;
+  }
 }
 
-
-
-int XeThruRadar::get_rpm() {
-  
-  int * rpm;
-  
-  //The arduino is not fast enough to receive all the data from the radar (it seems)
-  //...so always empty the buffer of old data, so that we are sure we have fresh data
-  empty_serial_buffer();
-  
-  if (receive_data() != 0)
-  {
-     //Something went wrong! 
-     return -1;
+void XeThruRadar::get_pong_val(unsigned long * pong_val)
+{ 
+  // Check that the received message is a PONG response
+  if (_recv_buf[1] != _xts_spr_pong) {
+    debug_println("Expected PONG, received something else. Halting.");
+    while (1) {}
   }
-  
-  // Now recv_buf should be filled with valid data
-  
-  
-  // Check that it's app-data we've received
-  if (_recv_buf[1] != _xts_spr_appdata)
-  {
-     //Something went wrong! 
-     return -1;
-  }
-  
-  
-  // TODO: Check that _xts_id_resp_status is correct (just to make sure we are getting the right data)
-  
-
-  // Check that it's the correct state code
-  if (_recv_buf[10] != _xts_val_resp_state_breathing)
-    return -1;
-  
-  
-  // Breathing detected, extract the rpm value
-  rpm = (int*)&_recv_buf[14];
-
-  //Return the rpm value as int
-  return *rpm;
+ 
+  // Get the pong_val of the response
+  memcpy(pong_val, _recv_buf+2, 4);
 }
-
-
-float XeThruRadar::get_resp_movement() {
-  
-  float * movement;
-  
-  //The arduino is not fast enough to receive all the data from the radar (it seems)
-  //...so always empty the buffer of old data, so that we are sure we have fresh data
-  empty_serial_buffer();
-  
-  if (receive_data() != 0)
-  {
-     //Something went wrong! 
-     return -99.0;
-  }
-  
-  // Now recv_buf should be filled with valid data
-  
-  
-  // Check that it's app-data we've received
-  if (_recv_buf[1] != _xts_spr_appdata)
-  {
-     //Something went wrong! 
-     return -99.0;
-  }
-  
-  // TODO: Check that _xts_id_resp_status is correct (just to make sure we are getting the right data)
-
-  // Check that it's the correct state code
-  if (_recv_buf[10] != _xts_val_resp_state_breathing)
-    return -99.0; 
-
-  //Point float pointer to the first byte of the float in the buffer
-  movement = (float*)&_recv_buf[22];      
-
-  //Return the float value
-  return *movement;   
-}
-
-
-int XeThruRadar::get_resp_state() {
-  
-  //The arduino is not fast enough to receive all the data from the radar (it seems)
-  //...so always empty the buffer of old data, so that we are sure we have fresh data
-  empty_serial_buffer();
-  
-  if (receive_data() != 0)
-  {
-     //Something went wrong! 
-     return -1;
-  }
-  
-  // Now recv_buf should be filled with valid data
-  
-  // Check that it's app-data we've received
-  if (_recv_buf[1] != _xts_spr_appdata)
-  {
-     //Something went wrong! 
-     return -1;
-  }
-  
-  // TODO: Check that _xts_id_resp_status is correct (just to make sure we are getting the right data)
-
-  
-  // State code
-  int state_code = _recv_buf[10]; 
-  return state_code;
-}
-
 
 
 // RESET MODULE
 void XeThruRadar::reset_module() {
+  
+  debug_println("Resetting module..."); 
   send_command(&_xts_spc_mod_reset, 1);
   
   //TODO: Implement some error checking to see that we recieve the correct response
-  receive_data();
-  receive_data();
+  receive_data(enable_debug_port);
+  receive_data(enable_debug_port);
 }
+
 
 // Load respiration app
 void XeThruRadar::load_respiration_app() 
 {
   //Fill send buffer
-  unsigned char send_buf[5];
-  send_buf[0] = _xts_spc_mod_loadapp;
-  send_buf[4] = (_xts_id_app_resp >> 24) & 0xff;
-  send_buf[3] = (_xts_id_app_resp >> 16) & 0xff;  
-  send_buf[2] = (_xts_id_app_resp >> 8) & 0xff;
-  send_buf[1] = _xts_id_app_resp & 0xff;
+  _send_buf[0] = _xts_spc_mod_loadapp;
+  _send_buf[4] = (_xts_id_app_resp >> 24) & 0xff;
+  _send_buf[3] = (_xts_id_app_resp >> 16) & 0xff;  
+  _send_buf[2] = (_xts_id_app_resp >> 8) & 0xff;
+  _send_buf[1] = _xts_id_app_resp & 0xff;
   
   //Send the command
-  send_command(send_buf, 5);
+  send_command(_send_buf, 5);
   
   //Get response
-  receive_data();
-}
-
-// Load sleep app
-void XeThruRadar::load_sleep_app() 
-{
-  //Fill send buffer
-  unsigned char send_buf[5];
-  send_buf[0] = _xts_spc_mod_loadapp;
-  send_buf[4] = (_xts_id_app_sleep >> 24) & 0xff;
-  send_buf[3] = (_xts_id_app_sleep >> 16) & 0xff;  
-  send_buf[2] = (_xts_id_app_sleep >> 8) & 0xff;
-  send_buf[1] = _xts_id_app_sleep & 0xff;
-  
-  //Send the command
-  send_command(send_buf, 5);
-  
-  //Get response
-  receive_data();
-}
-
-// Enable Raw Data
-void XeThruRadar::enable_raw_data() 
-{
-  //Convert these values to int
-  int XTS_SACR_OUTPUTBASEBAND = _xts_sacr_outputbaseband;
-  int XTS_SACR_ID_BASEBAND_OUTPUT_AP = _xts_sacr_id_baseband_output_iq_amplitude_phase;
-  
-  //Fill send buffer
-  unsigned char send_buf[10];
-  
-  send_buf[0] = _xts_spc_dir_command;
-  send_buf[1] = _xts_sdc_app_setint;
-  
-  send_buf[2] = XTS_SACR_OUTPUTBASEBAND & 0xff;
-  send_buf[3] = (XTS_SACR_OUTPUTBASEBAND >> 8) & 0xff;
-  send_buf[4] = (XTS_SACR_OUTPUTBASEBAND >> 16) & 0xff;  
-  send_buf[5] = (XTS_SACR_OUTPUTBASEBAND >> 24) & 0xff;
-  
-  send_buf[6] = XTS_SACR_ID_BASEBAND_OUTPUT_AP & 0xff;
-  send_buf[7] = (XTS_SACR_ID_BASEBAND_OUTPUT_AP >> 8) & 0xff;
-  send_buf[8] = (XTS_SACR_ID_BASEBAND_OUTPUT_AP >> 16) & 0xff;  
-  send_buf[9] = (XTS_SACR_ID_BASEBAND_OUTPUT_AP >> 24) & 0xff;  
-  
-  
-  //Send the command
-  send_command(send_buf, 10);
-  
-  //Get response
-  receive_data();
-}
-
-
-
-// Execute application
-void XeThruRadar::execute_app() 
-{
-  //Fill send buffer
-  unsigned char send_buf[2];
-  send_buf[0] = _xts_spc_mod_setmode;
-  send_buf[1] = _xts_sm_run;
-
-  // Send the command
-  send_command(send_buf, 2);
-  // Get response
-  receive_data();  
-}
-
-=======
-/*
-  XeThruRadar.cpp - Library for using the XeThru Radar module
-  Created by Oyvind N. Dahl, August 13, 2015.
-*/
-
-#include "XeThruRadar.h"
-
-/*
-XeThruRadar::XeThruRadar()
-{
-  Serial.begin(115200);
-  Serial.write(88);
-}
-*/
-
-XeThruRadar::XeThruRadar()
-{
-}
-
-void XeThruRadar::init()
-{
-  Serial.begin(115200); 
-}
-
-
-void XeThruRadar::send_command(const unsigned char * cmd, int len) {
-
-  // Calculate CRC
-  char crc = _xt_start;
-  for (int i = 0; i < len; i++)
-    crc ^= cmd[i];
-
-  
-  // Add escape bytes if necessary
-  for (int i = 0; i < len; i++) {
-    if (cmd[i] == 0x7D || cmd[i] == 0x7E || cmd[i] == 0x7F)
-    {
-     //TODO: Implement escaping 
-    }
-  }
-  
-  // Send xt_start + command + crc_string + xt_stop
-  Serial.write(_xt_start);
-  Serial.write(cmd, len);
-  Serial.write(crc);
-  Serial.write(_xt_stop);
-  
-}
-  
-  
-  
-int XeThruRadar::receive_data() {
-  
-  // Get response
-
-  char last_char = 0x00;
-  int recv_len = 0;  //Number of bytes received
-
-  //Wait for start character
-  while (1) 
-  {
-    char c = Serial.read();	// Get one byte from radar
-    
-    if (c == _xt_escape)
-    {
-      // If it's an escape character –
-      // ...ignore next character in buffer
-      Serial.read();
-    }
-    else if (c == _xt_start) 
-    {
-      // If it's the start character –  
-      // ...we fill the first character of the buffer and move on
-      _recv_buf[0] = _xt_start;
-      recv_len = 1;
-      break;
-    }
-  }
-  
-  // Start receiving the rest of the bytes
-  while (1) 
-  {
-    // read a byte
-    char cur_char = Serial.read();	// Get one byte from radar
-    
-    if (cur_char == -1) {
-      continue;
-    }
-      
-    // Fill response buffer, and increase counter
-    _recv_buf[recv_len] = cur_char;
-    recv_len++;
-    
-    // is it the stop byte?
-    if (cur_char == _xt_stop) {
-      if (last_char != _xt_escape)
-        break;  //Exit this loop 
-    }
-    
-    // Update last_char
-    last_char = cur_char;
-  }
-  
-  
-  
-  // Calculate CRC
-  char crc = 0;
-  char escape_found = 0;
-  
-  // CRC is calculated without the crc itself and the stop byte, hence the -2 in the counter
-  for (int i = 0; i < recv_len-2; i++) 
-  {
-    // We need to ignore escape bytes when calculating crc
-    if (_recv_buf[i] == _xt_escape && !escape_found) {
-      escape_found = 1;
-      continue;
-    }
-    else {
-      crc ^= _recv_buf[i];
-      escape_found = 0;
-    }
-  }
-  
-  
-  // Check if calculated CRC matches the recieved
-  if (crc == _recv_buf[recv_len-2]) 
-  {
-    return 0;  // Return 0 upon success
-  }
-  else 
-  {
-    return -1; // Return -1 upon crc failure
-  } 
-}
-
-
-void XeThruRadar::empty_serial_buffer()
-{
-  while (Serial.available())
-  {
-    Serial.read();	// Remove one byte from the buffer
-  } 
-}
-
-
-int XeThruRadar::get_rpm() {
-  
-  int * rpm;
-  
-  //The arduino is not fast enough to receive all the data from the radar (it seems)
-  //...so always empty the buffer of old data, so that we are sure we have fresh data
-  empty_serial_buffer();
-  
-  if (receive_data() != 0)
-  {
-     //Something went wrong! 
-     return -1;
-  }
-  
-  // Now recv_buf should be filled with valid data
-  
-  
-  // Check that it's app-data we've received
-  if (_recv_buf[1] != _xts_spr_appdata)
-  {
-     //Something went wrong! 
-     return -1;
-  }
-  
-  
-  // TODO: Check that _xts_id_resp_status is correct (just to make sure we are getting the right data)
-  
-
-  // Check that it's the correct state code
-  if (_recv_buf[10] != _xts_val_resp_state_breathing)
-    return -1;
-  
-  
-  // Breathing detected, extract the rpm value
-  rpm = (int*)&_recv_buf[14];
-
-  //Return the rpm value as int
-  return *rpm;
-}
-
-
-float XeThruRadar::get_resp_movement() {
-  
-  float * movement;
-  
-  //The arduino is not fast enough to receive all the data from the radar (it seems)
-  //...so always empty the buffer of old data, so that we are sure we have fresh data
-  empty_serial_buffer();
-  
-  if (receive_data() != 0)
-  {
-     //Something went wrong! 
-     return -99.0;
-  }
-  
-  // Now recv_buf should be filled with valid data
-  
-  
-  // Check that it's app-data we've received
-  if (_recv_buf[1] != _xts_spr_appdata)
-  {
-     //Something went wrong! 
-     return -99.0;
-  }
-  
-  // TODO: Check that _xts_id_resp_status is correct (just to make sure we are getting the right data)
-
-  // Check that it's the correct state code
-  if (_recv_buf[10] != _xts_val_resp_state_breathing)
-    return -99.0; 
-
-  //Point float pointer to the first byte of the float in the buffer
-  movement = (float*)&_recv_buf[22];      
-
-  //Return the float value
-  return *movement;   
-}
-
-
-int XeThruRadar::get_resp_state() {
-  
-  //The arduino is not fast enough to receive all the data from the radar (it seems)
-  //...so always empty the buffer of old data, so that we are sure we have fresh data
-  empty_serial_buffer();
-  
-  if (receive_data() != 0)
-  {
-     //Something went wrong! 
-     return -1;
-  }
-  
-  // Now recv_buf should be filled with valid data
-  
-  // Check that it's app-data we've received
-  if (_recv_buf[1] != _xts_spr_appdata)
-  {
-     //Something went wrong! 
-     return -1;
-  }
-  
-  // TODO: Check that _xts_id_resp_status is correct (just to make sure we are getting the right data)
-
-  
-  // State code
-  int state_code = _recv_buf[10]; 
-  return state_code;
-}
-
-
-
-// RESET MODULE
-void XeThruRadar::reset_module() {
-  send_command(&_xts_spc_mod_reset, 1);
-  
-  //TODO: Implement some error checking to see that we recieve the correct response
-  receive_data();
-  receive_data();
-}
-
-// Load respiration app
-void XeThruRadar::load_respiration_app() 
-{
-  //Fill send buffer
-  unsigned char send_buf[5];
-  send_buf[0] = _xts_spc_mod_loadapp;
-  send_buf[4] = (_xts_id_app_resp >> 24) & 0xff;
-  send_buf[3] = (_xts_id_app_resp >> 16) & 0xff;  
-  send_buf[2] = (_xts_id_app_resp >> 8) & 0xff;
-  send_buf[1] = _xts_id_app_resp & 0xff;
-  
-  //Send the command
-  send_command(send_buf, 5);
-  
-  //Get response
-  receive_data();
+  receive_data(enable_debug_port);
 }
 
 // Execute application
 void XeThruRadar::execute_app() 
 {
   //Fill send buffer
-  unsigned char send_buf[2];
-  send_buf[0] = _xts_spc_mod_setmode;
-  send_buf[1] = _xts_sm_run;
+  _send_buf[0] = _xts_spc_mod_setmode;
+  _send_buf[1] = _xts_sm_run;
 
   // Send the command
-  send_command(send_buf, 2);
+  send_command(_send_buf, 2);
   // Get response
-  receive_data();  
+  receive_data(enable_debug_port);  
 }
 
->>>>>>> 7f90551a4d224be945a5e3e63edeb2efac8f774d
+
+/**
+* Set the detection zone of the radar
+*/
+void XeThruRadar::setDetectionZone(float start_zone, float end_zone)
+{
+  _send_buf[0] = _xts_spc_appcommand;
+  _send_buf[1] = _xts_spca_set;
+
+  memcpy(_send_buf+2, &_xts_id_detection_zone, 4);
+  memcpy(_send_buf+6, &start_zone, 4);
+  memcpy(_send_buf+10, &end_zone, 4);
+
+  //Send the command
+  send_command(_send_buf, 14);
+
+  //Get response
+  receive_data(enable_debug_port);
+
+  // Check if acknowledge was received
+  //check_ack();
+}
+
+
+/**
+* Set sensitivity
+*/
+void XeThruRadar::setSensitivity(long sensitivity)
+{
+  _send_buf[0] = _xts_spc_appcommand;
+  _send_buf[1] = _xts_spca_set;
+
+  memcpy(_send_buf+2, &_xts_id_sensitivity, 4);
+  memcpy(_send_buf+6, &sensitivity, 4);
+
+  //Send the command
+  send_command(_send_buf, 10);
+
+  //Get response
+  receive_data(enable_debug_port);
+
+  // Check if acknowledge was received
+  //check_ack();
+
+}
+
+
+
+
+/**********************************************************
+  This function retrieves a packet of respiration data, 
+  extracts the content and returns it in a readable format
+***********************************************************/
+RespirationData XeThruRadar::get_respiration_data()
+{
+  RespirationData data; // For storing and returning respiration data
+  String str;           //For debugging
+  
+  // receive_data() fills _recv_buf[] with valid data
+  if (receive_data(enable_debug_port) < 0)
+  {
+     //Something went wrong! 
+     data.valid_data = false;
+     return data;
+  }
+  
+  // Check that it's app-data we've received
+  if (_recv_buf[1] != _xts_spr_appdata)
+  {
+     //Something went wrong! 
+     data.valid_data = false;
+     return data;
+  }
+  
+  // Get state code
+  data.state_code = _recv_buf[10];
+  str = String((int)data.state_code);
+  debug_println("get_respiration_data: state_code= " + str);
+  
+  // Get rpm value
+  memcpy(&data.rpm, &_recv_buf[14], 4);
+  //data.rpm = *(int*)&_recv_buf[14];
+  str = String(data.rpm);
+  debug_println("get_respiration_data: rpm= " + str);
+  
+  // Get movement value
+  memcpy(&data.movement, &_recv_buf[22], 4);
+  //data.movement = *(float*)&_recv_buf[22];
+  str = String(data.movement);
+  debug_println("get_respiration_data: movement= " + str);
+  
+  // Set state to indicate valid data
+  data.valid_data = true;
+  
+  // Return the extracted data
+  return data;
+}
+
+
