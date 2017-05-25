@@ -3,11 +3,9 @@
 // May 2017
 //
 
-
 #include <XeThruRadar.h>
 
-// Serial ports for Arduino Zero (Change these if you are using a different Arduino)
-#define SerialRadar Serial1
+// Serial port for debugging (Change to match the serial port on your Arduino)
 #define SerialDebug SerialUSB
 
 

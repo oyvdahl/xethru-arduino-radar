@@ -13,8 +13,13 @@
 
 #include "XeThruRadar.h"
 
+#ifndef SERIAL_BUFFER_SIZE
+#define SERIAL_BUFFER_SIZE SERIAL_RX_BUFFER_SIZE
+#endif
+
 #define SerialRadar Serial1
 #define SerialDebug SerialUSB
+
 
 XeThruRadar::XeThruRadar() {}
 
