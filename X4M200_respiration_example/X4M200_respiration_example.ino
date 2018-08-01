@@ -23,13 +23,13 @@
 #define XT_STOP 0x7e
 #define XT_ESCAPE 0x7f
 
-#define XTS_ID_SLEEP_STATUS                             0x2375a16c
-#define XTS_ID_RESP_STATUS                              0x2375fe26
-#define XTS_ID_RESPIRATION_MOVINGLIST                   0x610a3b00
-#define XTS_ID_RESPIRATION_DETECTIONLIST                0x610a3b02
-#define XTS_ID_APP_RESPIRATION_2                        0x064e57ad
-#define XTS_ID_DETECTION_ZONE                           0x96a10a1c
-#define XTS_ID_SENSITIVITY                              0x10a5112b
+#define XTS_ID_SLEEP_STATUS                             (uint32_t)0x2375a16c
+#define XTS_ID_RESP_STATUS                              (uint32_t)0x2375fe26
+#define XTS_ID_RESPIRATION_MOVINGLIST                   (uint32_t)0x610a3b00
+#define XTS_ID_RESPIRATION_DETECTIONLIST                (uint32_t)0x610a3b02
+#define XTS_ID_APP_RESPIRATION_2                        (uint32_t)0x064e57ad
+#define XTS_ID_DETECTION_ZONE                           (uint32_t)0x96a10a1c
+#define XTS_ID_SENSITIVITY                              (uint32_t)0x10a5112b
 
 // Profile codes
 #define XTS_VAL_RESP_STATE_BREATHING      0x00 // Valid RPM sensing
@@ -65,8 +65,8 @@
 #define XTS_SPR_ACK 0x10
 #define XTS_SPR_ERROR 0x20
 
-#define XTS_SPRS_BOOTING 0x00000010
-#define XTS_SPRS_READY 0x00000011
+#define XTS_SPRS_BOOTING (uint32_t)0x00000010
+#define XTS_SPRS_READY (uint32_t)0x00000011
 
 #define XTS_SPCA_SET 0x10
 #define XTS_SPCN_SETCONTROL 0x10
@@ -105,7 +105,7 @@ void setup()
   stop_module();
   
   // Load respiration profile  
-  load_respiration_profile();
+  load_profile(XTS_ID_APP_RESPIRATION_2);
 
   // Configure the noisemap
   configure_noisemap();
@@ -258,7 +258,7 @@ void stop_module()
 
 
 // Set sensitivity
-void set_sensitivity(unsigned int sensitivity) 
+void set_sensitivity(uint32_t sensitivity) 
 {
   //Fill send buffer
   send_buf[0] = XT_START;
@@ -323,16 +323,16 @@ void run_profile()
 }
 
 
-// Load respiration profile
-void load_respiration_profile() 
+// Load profile
+void load_profile(uint32_t profile)
 {
   //Fill send buffer
   send_buf[0] = XT_START;
   send_buf[1] = XTS_SPC_MOD_LOADAPP;
-  send_buf[2] = XTS_ID_APP_RESPIRATION_2 & 0xff;
-  send_buf[3] = (XTS_ID_APP_RESPIRATION_2 >> 8) & 0xff;
-  send_buf[4] = (XTS_ID_APP_RESPIRATION_2 >> 16) & 0xff;  
-  send_buf[5] = (XTS_ID_APP_RESPIRATION_2 >> 24) & 0xff;
+  send_buf[2] = profile & 0xff;
+  send_buf[3] = (profile >> 8) & 0xff;
+  send_buf[4] = (profile >> 16) & 0xff;  
+  send_buf[5] = (profile >> 24) & 0xff;
   
   //Send the command
   send_command(6);
@@ -340,7 +340,6 @@ void load_respiration_profile()
   // Get ACK response from radar
   get_ack();
 }
-
 
 void configure_noisemap() 
 {
@@ -492,10 +491,9 @@ void send_command(int len)
 
   // Print out sent data for debugging:
   SerialDebug.print("Sent: ");  
-  SerialDebug.print(XT_START, HEX);  
   for (int i = 0; i < len; i++) {
-    SerialDebug.print(" ");
     SerialDebug.print(send_buf[i], HEX);  
+    SerialDebug.print(" ");
   }
   SerialDebug.print(" ");
   SerialDebug.println(XT_STOP, HEX);
