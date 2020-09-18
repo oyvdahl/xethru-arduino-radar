@@ -1,14 +1,9 @@
 // Written by: Øyvind Nydal Dahl
 // Company: XeThru / Novelda
 // July 2018
+#include <SoftwareSerial.h>
 
-
-
-// SERIAL PORTS:
-// These definitions work for Arduino Mega, but must be changed for other Arduinos.
-//
-#define SerialRadar Serial1		// Used for communication with the radar
-#define SerialDebug Serial		// Used for printing debug information
+SoftwareSerial SerialDebug(10, 11); // RX, TX
 
 // Pin definitions
 #define RESET_PIN 2
@@ -93,7 +88,7 @@ void setup()
   digitalWrite(RESET_PIN, HIGH);
   
   // Set up serial communication
-  SerialRadar.begin(115200);
+  Serial.begin(115200);
   SerialDebug.begin(115200);
 
   // After the module resets, the XTS_SPRS_BOOTING message is sent. Then, after the 
@@ -241,8 +236,8 @@ void reset_module()
 void stop_module() 
 {
   // Empty the buffer before stopping the radar profile:
-  while (SerialRadar.available())
-    SerialRadar.read();
+  while (Serial.available())
+    Serial.read();
     
   // Fill send buffer
   send_buf[0] = XT_START;
@@ -452,7 +447,7 @@ void get_ack()
 
 /*
  * Adds CRC, Escaping and Stop byte to the
- * send_buf and sends it over the SerialRadar.
+ * send_buf and sends it over the Serial.
  */
 void send_command(int len) 
 { 
@@ -486,8 +481,8 @@ void send_command(int len)
   } 
   
   // Send data (including CRC) and XT_STOP
-  SerialRadar.write(send_buf, len);
-  SerialRadar.write(XT_STOP);
+  Serial.write(send_buf, len);
+  Serial.write(XT_STOP);
 
   // Print out sent data for debugging:
   SerialDebug.print("Sent: ");  
@@ -511,20 +506,20 @@ int receive_data() {
   int recv_len = 0;  //Number of bytes received
 
   // Wait 500 ms if nothing is available yet
-  if (!SerialRadar.available())
+  if (!Serial.available())
     delay(500);
     
   // Wait for start character
-  while (SerialRadar.available()) 
+  while (Serial.available()) 
   {
-    unsigned char c = SerialRadar.read();  // Get one byte from radar
+    unsigned char c = Serial.read();  // Get one byte from radar
 
     // If we receive an ESCAPE character, the next byte is never the real start character
     if (c == XT_ESCAPE)
     {
       // Wait for next byte and skip it.
-      while (!SerialRadar.available());
-      SerialRadar.read();
+      while (!Serial.available());
+      Serial.read();
     }
     else if (c == XT_START) 
     {
@@ -535,26 +530,26 @@ int receive_data() {
     }
 
     // Wait 10 ms if nothing is available yet
-    if (!SerialRadar.available())
+    if (!Serial.available())
       delay(10);
   }
 
   // Wait 10 ms if nothing is available yet
-  if (!SerialRadar.available())
+  if (!Serial.available())
     delay(10);
     
   // Start receiving the rest of the bytes
-  while (SerialRadar.available()) 
+  while (Serial.available()) 
   {
     // read a byte
-    unsigned char c = SerialRadar.read(); // Get one byte from radar
+    unsigned char c = Serial.read(); // Get one byte from radar
 
     // is it an escape byte?
     if (c == XT_ESCAPE)
     {
       // If it's an escape character next character in buffer is data and not special character:
-      while (!SerialRadar.available());
-      c = SerialRadar.read();
+      while (!Serial.available());
+      c = Serial.read();
     }
     // is it the stop byte?
     else if (c == XT_STOP) {
@@ -567,7 +562,7 @@ int receive_data() {
     recv_buf[recv_len++] = c;
 
     // Wait 10 ms if nothing is available yet
-    if (!SerialRadar.available())
+    if (!Serial.available())
       delay(10);
   }
 
